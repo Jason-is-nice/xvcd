@@ -7,7 +7,9 @@
 #include "../libFTDI/ftd2xx.h"
 
 // Configuration
-#define BAUD_RATE (3000000 / 16) // In bitbang mode, clock rate is 16x baud rate
+//#define BAUD_RATE (3000000 / 16) // In bitbang mode, clock rate is 16x baud rate, TCK = 3 MHz
+#define BAUD_RATE (15000000  / 16) // In bitbang mode, clock rate is 16x baud rate, TCK = 15 MHz
+//#define BAUD_RATE (30000000  / 16) // In bitbang mode, clock rate is 16x baud rate, TCK = 30 MHz
 
 #define PORT_TCK            0x01
 #define PORT_TDI            0x02
@@ -65,7 +67,7 @@ int io_scan(const unsigned char *TMS, const unsigned char *TDI, unsigned char *T
 {
 	LARGE_INTEGER qpc_times[10];
 	int qpc_inx = 0;
-	
+
 	// Baseline
 	QueryPerformanceCounter(&qpc_times[qpc_inx++]);
 
@@ -85,8 +87,12 @@ int io_scan(const unsigned char *TMS, const unsigned char *TDI, unsigned char *T
 			v |= PORT_TMS;
 		if (TDI[i/8] & (1<<(i&7)))
 			v |= PORT_TDI;
-		buffer[i * 2 + 0] = v;
-		buffer[i * 2 + 1] = v | PORT_TCK;
+
+		// one bit of tms and tdi needs two bytes to store, and simulated tck signal timing is 01010101...
+		// the first byte is tms and tdi, the second byte is tms and tdi | tck
+		// when tck is high, tms and tdi are shifted in ?
+		buffer[i * 2 + 0] = v;            //TMS/TDI (TCK=0)
+		buffer[i * 2 + 1] = v | PORT_TCK; //TMS/TDI | PORT_TCK (TCK=1)
 	}
 
 	// conv done
@@ -116,12 +122,17 @@ int io_scan(const unsigned char *TMS, const unsigned char *TDI, unsigned char *T
 	QueryPerformanceCounter(&qpc_times[qpc_inx++]);
 
 
+	//Why only take TDO when TCK=1?
+	//The JTAG protocol stipulates:
+	//- TDO changes at the falling edge of TCK (target chip outputs a new value)
+	//- TDO is sampled at the rising edge of TCK (host reads the current value)
+	//Therefore, TDO should be read at TCK=1 (the moment after the rising edge) to obtain a stable value.
 	memset(TDO, 0, (bits + 7) / 8);
 	for (int i = 0; i < bits; ++i)
 	{
-		if (buffer[i * 2 + 1] & PORT_TDO)
+		if (buffer[i * 2 + 1] & PORT_TDO) // TCK=1
 		{
-			TDO[i/8] |= 1 << (i&7);
+			TDO[i/8] |= 1 << (i&7); // gotit: TCK=1, TDO is shifted out
 		}
 	}
 
